@@ -212,11 +212,18 @@ pnpm tsx src/cli.ts press "alt+tab"
 
 ## Publishing
 
-Never publish this package locally with `npm publish` or `pnpm publish`.
-The package includes native Zig binaries for multiple platforms (macOS, Linux)
-that must be cross-compiled by CI. To release:
+**NEVER run `npm publish`, `pnpm publish`, or any publish command locally.**
+Local builds only produce macOS binaries. The published package must include
+Linux binaries too, which require building on an actual Linux runner with
+X11/Xext/Xtst/png headers. Only CI can produce a correct release.
+
+To release:
 
 1. Bump the version in `package.json`
 2. Update `CHANGELOG.md` with the new version and changes
 3. Commit and push to `main`
-4. GitHub Actions CI builds all platform binaries and publishes to npm
+4. GitHub Actions CI (`ci.yml`) builds macOS + Linux binaries and publishes to npm
+
+The CI publish job checks whether the version is already on npm and skips if
+so. This means you can push multiple commits to `main` and only the version
+bump commit triggers an actual publish.

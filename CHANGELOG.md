@@ -4,6 +4,10 @@
 
 All notable changes to `usecomputer` will be documented in this file.
 
+## 0.1.4
+
+Same as 0.1.3 but published via CI with correct Linux binaries included.
+
 ## 0.1.3
 
 1. **Kitty Graphics Protocol support** — `screenshot` can now emit the PNG image
