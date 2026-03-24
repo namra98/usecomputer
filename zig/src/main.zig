@@ -225,11 +225,17 @@ fn screenshotAction(args: Screenshot.Args, opts: Screenshot.Options) !void {
         return error.CommandFailed;
     }
 
-    const agent_graphics = kitty_graphics.canEmitAgentGraphics();
+    // Attempt Kitty Graphics Protocol emission when AGENT_GRAPHICS=kitty is set.
+    // Track whether emission actually succeeded so JSON reports the real state
+    // (not just that it was requested).
+    const agent_graphics_emitted = if (kitty_graphics.canEmitAgentGraphics())
+        emitScreenshotKittyGraphics(result.data)
+    else
+        false;
 
     if (opts.json) {
         if (result.data) |data| {
-            printScreenshotJson(data, agent_graphics);
+            printScreenshotJson(data, agent_graphics_emitted);
         }
     } else {
         const stdout = getStdout();
@@ -238,32 +244,47 @@ fn screenshotAction(args: Screenshot.Args, opts: Screenshot.Options) !void {
                 data.path, data.imageWidth, data.imageHeight,
             });
         }
-    }
-
-    // Emit the screenshot as Kitty Graphics Protocol escape sequences when
-    // AGENT_GRAPHICS=kitty is set. An agent plugin (kitty-graphics-agent)
-    // intercepts these and injects the image into the LLM context.
-    if (agent_graphics) {
-        if (result.data) |data| {
-            const stdout = getStdout();
-            const png_data = std.fs.cwd().readFileAlloc(std.heap.page_allocator, data.path, 50 * 1024 * 1024) catch |err| {
-                const stderr = getStderr();
-                try stderr.print("warning: could not read screenshot for kitty graphics: {}\n", .{err});
-                return;
-            };
-            defer std.heap.page_allocator.free(png_data);
-            kitty_graphics.emitKittyGraphics(png_data, stdout) catch |err| {
-                const stderr = getStderr();
-                try stderr.print("warning: kitty graphics emission failed: {}\n", .{err});
-                return;
-            };
-            // In JSON mode, the JSON object already has "agentGraphics":true —
-            // don't print extra text to stdout (breaks single-JSON-object contract).
-            if (!opts.json) {
-                try stdout.print("The screenshot image is in your context. No need to read the file.\n", .{});
-            }
+        if (agent_graphics_emitted) {
+            try stdout.print("The screenshot image is in your context. No need to read the file.\n", .{});
         }
     }
+}
+
+/// Read a screenshot PNG and emit it as Kitty Graphics Protocol escape sequences.
+/// Handles both absolute and relative paths. Returns true if emission succeeded.
+fn emitScreenshotKittyGraphics(data: ?lib.ScreenshotOutput) bool {
+    const d = data orelse return false;
+    const path = d.path;
+
+    // Open file — handle absolute vs relative paths
+    const file = if (path.len > 0 and path[0] == '/')
+        std.fs.openFileAbsolute(path, .{})
+    else
+        std.fs.cwd().openFile(path, .{});
+
+    const f = file catch |err| {
+        const stderr = getStderr();
+        stderr.print("warning: could not open screenshot for kitty graphics: {}\n", .{err}) catch {};
+        return false;
+    };
+    defer f.close();
+
+    const bytes = f.readToEndAlloc(std.heap.page_allocator, 50 * 1024 * 1024) catch |err| {
+        const stderr = getStderr();
+        stderr.print("warning: could not read screenshot for kitty graphics: {}\n", .{err}) catch {};
+        return false;
+    };
+    defer std.heap.page_allocator.free(bytes);
+
+    if (bytes.len == 0) return false;
+
+    const stdout = getStdout();
+    kitty_graphics.emitKittyGraphics(bytes, stdout) catch |err| {
+        const stderr = getStderr();
+        stderr.print("warning: kitty graphics emission failed: {}\n", .{err}) catch {};
+        return false;
+    };
+    return true;
 }
 
 fn clickAction(args: Click.Args, opts: Click.Options) !void {
