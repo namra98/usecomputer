@@ -4,6 +4,43 @@
 
 All notable changes to `usecomputer` will be documented in this file.
 
+## 0.1.3
+
+1. **Kitty Graphics Protocol support** — `screenshot` can now emit the PNG image
+   inline to stdout using the [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+   Set `AGENT_GRAPHICS=kitty` and the image lands directly in the AI model's context
+   window — no separate file-read tool call needed:
+
+   ```bash
+   AGENT_GRAPHICS=kitty usecomputer screenshot ./shot.png --json
+   # JSON output: { ..., "agentGraphics": true }
+   ```
+
+   Works out of the box with [kitty-graphics-agent](https://github.com/remorses/kitty-graphics-agent),
+   an OpenCode plugin that intercepts the escape sequences and injects them as
+   LLM-visible image attachments. Add it to `opencode.json` to enable:
+
+   ```json
+   { "plugin": ["kitty-graphics-agent"] }
+   ```
+
+   The plugin sets `AGENT_GRAPHICS=kitty` automatically. `agentGraphics` in the
+   JSON output is `true` only when emission actually succeeded.
+
+2. **Aligned table output for list commands** — `display list`, `window list`, and
+   `desktop list` now render as aligned, human-readable tables (matching the format
+   the old TypeScript CLI produced). JSON mode (`--json`) is unchanged:
+
+   ```
+   desktop  primary  size        position  id  scale  name
+   0        yes      3440x1440   0,0       5   1      Display 5
+   1        no       1512x982    3440,458  1   1      Display 1
+   ```
+
+3. **Fixed `agentGraphics` JSON field** — the field now reflects actual Kitty
+   emission success rather than just whether `AGENT_GRAPHICS=kitty` was set.
+   Empty PNG files and I/O errors report `false` instead of `true`.
+
 ## 0.1.2
 
 1. **Removed all unimplemented command stubs** — 18 placeholder commands (`snapshot`, `get text/title/value/bounds/focused`, `window focus/resize/move/minimize/maximize/close`, `app list/launch/quit`, `wait`, `find`, `diff snapshot/screenshot`) that only threw "TODO not implemented" have been removed. The CLI now only exposes commands that actually work.
