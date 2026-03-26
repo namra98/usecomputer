@@ -90,12 +90,18 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // Version option — passed from scripts/build.ts (reads package.json)
+    const version = b.option([]const u8, "version", "Package version string") orelse "dev";
+    const version_options = b.addOptions();
+    version_options.addOption([]const u8, "version", version);
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("zig/src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
     exe_mod.addImport("usecomputer_lib", exe_lib_mod);
+    exe_mod.addImport("build_options", version_options.createModule());
     exe_mod.addImport("zeke", b.dependency("zeke", .{
         .target = target,
         .optimize = optimize,

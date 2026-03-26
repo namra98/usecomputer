@@ -4,6 +4,12 @@
 
 All notable changes to `usecomputer` will be documented in this file.
 
+## 0.1.6
+
+- **Version string from package.json** — the CLI binary now reports the correct
+  version instead of a stale hardcoded string. The build pipeline reads the
+  version from `package.json` and passes it to Zig via `-Dversion`.
+
 ## 0.1.5
 
 - **Fix `bunx` compatibility** — the shell launcher now ensures the native binary

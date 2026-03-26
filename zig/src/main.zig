@@ -995,7 +995,8 @@ pub fn main() !void {
         ClipboardSet.bind(clipboardSetAction),
     }).init(gpa.allocator(), "usecomputer");
 
-    app.setVersion("0.1.2");
+    const build_options = @import("build_options");
+    app.setVersion(build_options.version);
     app.run() catch |err| {
         switch (err) {
             error.CommandFailed, error.InvalidCoordinate, error.MissingArgument => {},

@@ -14,6 +14,10 @@ const rootDirectory = path.resolve(import.meta.dirname, '..')
 const distDirectory = path.join(rootDirectory, 'dist')
 const zigOutputDirectory = path.join(rootDirectory, 'zig-out', 'lib')
 
+// Read version from package.json so the Zig binary embeds the correct version string
+const packageJson = JSON.parse(fs.readFileSync(path.join(rootDirectory, 'package.json'), 'utf-8'))
+const packageVersion: string = packageJson.version
+
 // host platform in the same format as target names (e.g. "linux-x64", "darwin-arm64")
 const hostTarget = `${os.platform()}-${os.arch()}`
 
@@ -25,11 +29,27 @@ const targets: Target[] = [
   { name: 'win32-x64', zigTarget: 'x86_64-windows-gnu' },
 ]
 
+// Zig 0.15.2's linker can't parse macOS 26+ SDK TBD files (arm64e-macos
+// targets, no arm64-macos). Using the CommandLineTools SDK (which still has
+// arm64-macos) via DEVELOPER_DIR works around this without needing sudo.
+function zigEnv(): Record<string, string> {
+  const env = { ...process.env }
+  if (
+    process.platform === 'darwin' &&
+    !process.env['DEVELOPER_DIR'] &&
+    fs.existsSync('/Library/Developer/CommandLineTools')
+  ) {
+    env['DEVELOPER_DIR'] = '/Library/Developer/CommandLineTools'
+  }
+  return env
+}
+
 function runCommand({ command, args, cwd }: { command: string; args: string[]; cwd: string }): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(command, args, {
       cwd,
       stdio: 'inherit',
+      env: command === 'zig' ? zigEnv() : undefined,
     })
     child.on('error', (error) => {
       reject(error)
@@ -75,8 +95,8 @@ async function buildTarget({ target }: { target: Target }): Promise<void> {
   // target makes Zig ignore host system libraries (X11, png, etc).
   const isNativeBuild = target.name === hostTarget
   const zigArgs = isNativeBuild
-    ? ['build', '-Doptimize=ReleaseFast']
-    : ['build', '-Doptimize=ReleaseFast', `-Dtarget=${target.zigTarget}`]
+    ? ['build', '-Doptimize=ReleaseFast', `-Dversion=${packageVersion}`]
+    : ['build', '-Doptimize=ReleaseFast', `-Dtarget=${target.zigTarget}`, `-Dversion=${packageVersion}`]
   await runCommand({
     command: 'zig',
     args: zigArgs,
