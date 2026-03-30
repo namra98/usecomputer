@@ -5,8 +5,10 @@
 # Zig cross-compiles x86_64-macos from ARM fine since both
 # use the same macOS SDK. macos-13 (Intel) runners are retired.
 #
-# linux-x64 is built on ubuntu-latest because linkSystemLibrary
+# linux-x64 is built natively on ubuntu-latest because linkSystemLibrary
 # needs X11/Xext/Xtst/png headers from the system.
+# linux-arm64 is cross-compiled from the same x64 runner — Zig handles
+# the aarch64-linux-gnu target using its bundled libc headers.
 #
 # win32-x64 is built on windows-latest.
 
@@ -92,11 +94,20 @@ jobs:
       - name: Build native linux-x64
         run: pnpm tsx scripts/build.ts linux-x64
 
+      - name: Build native linux-arm64 (cross-compile)
+        run: pnpm tsx scripts/build.ts linux-arm64
+
       - name: Upload linux-x64
         uses: actions/upload-artifact@v4
         with:
           name: native-linux-x64
           path: dist/linux-x64/
+
+      - name: Upload linux-arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-arm64
+          path: dist/linux-arm64/
 
   build-windows:
     runs-on: windows-latest
@@ -175,6 +186,12 @@ jobs:
         with:
           name: native-linux-x64
           path: dist/linux-x64/
+
+      - name: Download linux-arm64
+        uses: actions/download-artifact@v4
+        with:
+          name: native-linux-arm64
+          path: dist/linux-arm64/
 
       - name: Download win32-x64
         uses: actions/download-artifact@v4

@@ -4,6 +4,22 @@
 
 All notable changes to `usecomputer` will be documented in this file.
 
+## 0.1.8
+
+1. **AArch64 Linux support** — prebuilt binaries for `linux-arm64` are now
+   included in the npm package. Install and run on ARM64 Linux machines
+   (Raspberry Pi 5, AWS Graviton, Ampere, Apple Silicon VMs) the same way
+   as x64:
+
+   ```bash
+   npm install -g usecomputer
+   usecomputer screenshot ./shot.png --json
+   usecomputer click -x 600 -y 400
+   ```
+
+   The Zig source already supported aarch64-linux — this release adds the
+   CI cross-compile step so the binary actually ships.
+
 ## 0.1.7
 
 1. **Fixed `usecomputer` command on Windows** — the npm `bin` entry now works from
