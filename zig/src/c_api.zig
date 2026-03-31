@@ -201,7 +201,7 @@ export fn uc_press(key: [*:0]const u8, count: c_int, delay_ms: c_int) c_int {
 
 export fn uc_scroll(
     direction: [*:0]const u8,
-    amount: f64,
+    amount: c_int,
     at_x: f64,
     at_y: f64,
     has_at: c_int,
@@ -211,7 +211,7 @@ export fn uc_scroll(
     const at: ?lib.Point = if (has_at != 0) .{ .x = at_x, .y = at_y } else null;
     const result = lib.scroll(.{
         .direction = dir_slice,
-        .amount = amount,
+        .amount = if (amount > 0) @as(f64, @floatFromInt(amount)) else 1,
         .at = at,
     });
     if (result.ok) return 0;
@@ -220,14 +220,14 @@ export fn uc_scroll(
 
 export fn uc_screenshot(
     path: ?[*:0]const u8,
-    display: f64,
-    window_id: f64,
+    display: c_int,
+    window_id: c_int,
 ) [*c]u8 {
     clearError();
     const result = lib.screenshot(.{
         .path = cStrToSlice(path),
-        .display = if (display >= 0) display else null,
-        .window = if (window_id >= 0) window_id else null,
+        .display = if (display >= 0) @as(f64, @floatFromInt(display)) else null,
+        .window = if (window_id >= 0) @as(f64, @floatFromInt(window_id)) else null,
     });
     if (!result.ok) {
         if (result.@"error") |err| {
