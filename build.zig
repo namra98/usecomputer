@@ -127,6 +127,41 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the CLI");
     run_step.dependOn(&run_exe.step);
 
+    // ── C API shared library ──
+
+    const c_api_options = b.addOptions();
+    c_api_options.addOption(bool, "enable_napigen", false);
+
+    const c_api_lib_mod = b.createModule(.{
+        .root_source_file = b.path("zig/src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    c_api_lib_mod.addImport("build_options", c_api_options.createModule());
+    if (target_os == .macos) {
+        if (b.lazyDependency("zig_objc", .{
+            .target = target,
+            .optimize = optimize,
+        })) |dep| {
+            c_api_lib_mod.addImport("objc", dep.module("objc"));
+        }
+    }
+
+    const c_api_lib = b.addLibrary(.{
+        .name = "usecomputer_c",
+        .root_module = c_api_lib_mod,
+        .linkage = .dynamic,
+    });
+    linkPlatformDeps(c_api_lib.root_module, target_os);
+    c_api_lib.root_module.link_libc = true;
+
+    const c_api_step = b.step("c-api", "Build the C API shared library");
+    const install_c_api = b.addInstallArtifact(c_api_lib, .{});
+    c_api_step.dependOn(&install_c_api.step);
+
+    const install_header = b.addInstallHeaderFile(b.path("zig/include/usecomputer.h"), "usecomputer.h");
+    c_api_step.dependOn(&install_header.step);
+
     // ── Tests ──
 
     const test_options = b.addOptions();
