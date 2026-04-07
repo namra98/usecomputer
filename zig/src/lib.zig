@@ -236,6 +236,13 @@ pub const ScreenshotRegion = struct {
     height: f64,
 };
 
+const DesktopRect = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
 const ScreenshotInput = struct {
     path: ?[]const u8 = null,
     display: ?f64 = null,
@@ -425,6 +432,13 @@ pub fn screenshot(input: ScreenshotInput) DataResult(ScreenshotOutput) {
         return failData(ScreenshotOutput, "screenshot", "UNSUPPORTED_PLATFORM", "screenshot is unsupported on this platform");
     }
 
+    if (input.window) |window_id| {
+        const output = captureMacosWindowScreenshot(window_id, output_path) catch {
+            return failData(ScreenshotOutput, "screenshot", "CAPTURE_FAILED", "failed to capture screenshot image");
+        };
+        return okData(ScreenshotOutput, output);
+    }
+
     const capture = createScreenshotImage(.{
         .display_index = input.display,
         .window_id = input.window,
@@ -456,6 +470,52 @@ pub fn screenshot(input: ScreenshotInput) DataResult(ScreenshotOutput) {
         .imageWidth = scaled_image.width,
         .imageHeight = scaled_image.height,
     });
+}
+
+fn captureMacosWindowScreenshot(window_id: f64, output_path: []const u8) !ScreenshotOutput {
+    const normalized_window_id = try normalizeWindowId(window_id);
+    const window_info = try findWindowInfoById(normalized_window_id);
+    const window_bounds = cgRectFromDesktopRect(.{
+        .x = window_info.bounds.x,
+        .y = window_info.bounds.y,
+        .width = window_info.bounds.width,
+        .height = window_info.bounds.height,
+    });
+    const selected_display = try resolveDisplayForRect(window_bounds);
+
+    try captureMacosWindowToPath(normalized_window_id, output_path);
+
+    const captured_image = try loadScreenshotImageAtPath(output_path);
+    defer c.CFRelease(captured_image);
+
+    const image_width = @as(f64, @floatFromInt(c.CGImageGetWidth(captured_image)));
+    const image_height = @as(f64, @floatFromInt(c.CGImageGetHeight(captured_image)));
+    const long_edge = @max(image_width, image_height);
+
+    var final_width = image_width;
+    var final_height = image_height;
+    if (long_edge > screenshot_max_long_edge_px) {
+        const scaled_image = try scaleScreenshotImageIfNeeded(captured_image);
+        defer c.CFRelease(scaled_image.image);
+
+        try writeScreenshotPng(.{
+            .image = scaled_image.image,
+            .output_path = output_path,
+        });
+        final_width = scaled_image.width;
+        final_height = scaled_image.height;
+    }
+
+    return .{
+        .path = output_path,
+        .desktopIndex = @floatFromInt(selected_display.index),
+        .captureX = window_info.bounds.x,
+        .captureY = window_info.bounds.y,
+        .captureWidth = window_info.bounds.width,
+        .captureHeight = window_info.bounds.height,
+        .imageWidth = final_width,
+        .imageHeight = final_height,
+    };
 }
 
 fn linuxScreenshotErrorCode(err: anyerror) []const u8 {
@@ -2054,6 +2114,24 @@ test "parseClickModifiers rejects non modifier keys" {
     try std.testing.expectError(error.UnknownModifier, parseClickModifiers(&.{"enter"}));
 }
 
+test "rectInDisplaySpace keeps primary display coordinates unchanged" {
+    const rect = rectInDisplaySpace(
+        .{ .x = 0, .y = 0, .width = 3440, .height = 1440 },
+        .{ .x = 120, .y = 80, .width = 640, .height = 480 },
+    );
+
+    try std.testing.expectEqualDeep(DesktopRect{ .x = 120, .y = 80, .width = 640, .height = 480 }, rect);
+}
+
+test "rectInDisplaySpace converts desktop coordinates to display-local coordinates" {
+    const rect = rectInDisplaySpace(
+        .{ .x = 3440, .y = 458, .width = 1512, .height = 982 },
+        .{ .x = 3600, .y = 520, .width = 900, .height = 700 },
+    );
+
+    try std.testing.expectEqualDeep(DesktopRect{ .x = 160, .y = 62, .width = 900, .height = 700 }, rect);
+}
+
 fn normalizedCount(value: ?f64) u32 {
     if (value) |count| {
         const rounded = @as(i64, @intFromFloat(std.math.round(count)));
@@ -2476,23 +2554,55 @@ fn createScreenshotImage(input: struct {
         const normalized_window_id = normalizeWindowId(window_id) catch {
             return error.InvalidWindowId;
         };
-        const window_bounds = findWindowBoundsById(normalized_window_id) catch {
+        const window_info = findWindowInfoById(normalized_window_id) catch {
             return error.WindowNotFound;
         };
+        const window_bounds = cgRectFromDesktopRect(.{
+            .x = window_info.bounds.x,
+            .y = window_info.bounds.y,
+            .width = window_info.bounds.width,
+            .height = window_info.bounds.height,
+        });
         const selected_display = resolveDisplayForRect(window_bounds) catch {
             return error.DisplayResolutionFailed;
         };
 
-        const window_image = c.CGDisplayCreateImageForRect(selected_display.id, window_bounds);
-        if (window_image == null) {
+        const temp_path = createMacosWindowCaptureTempPath(normalized_window_id) catch {
+            return error.CaptureFailed;
+        };
+        defer std.heap.c_allocator.free(temp_path);
+        defer std.fs.deleteFileAbsolute(temp_path) catch {};
+
+        captureMacosWindowToPath(normalized_window_id, temp_path) catch {
+            return error.CaptureFailed;
+        };
+
+        const window_image = loadScreenshotImageAtPath(temp_path) catch null;
+        if (window_image != null) {
+            return .{
+                .image = window_image.?,
+                .capture_x = window_info.bounds.x,
+                .capture_y = window_info.bounds.y,
+                .capture_width = window_info.bounds.width,
+                .capture_height = window_info.bounds.height,
+                .desktop_index = selected_display.index,
+            };
+        }
+
+        const display_rect = rectInDisplaySpace(
+            desktopRectFromCGRect(selected_display.bounds),
+            desktopRectFromCGRect(window_bounds),
+        );
+        const fallback_image = c.CGDisplayCreateImageForRect(selected_display.id, cgRectFromDesktopRect(display_rect));
+        if (fallback_image == null) {
             return error.CaptureFailed;
         }
         return .{
-            .image = window_image,
-            .capture_x = window_bounds.origin.x,
-            .capture_y = window_bounds.origin.y,
-            .capture_width = window_bounds.size.width,
-            .capture_height = window_bounds.size.height,
+            .image = fallback_image,
+            .capture_x = window_info.bounds.x,
+            .capture_y = window_info.bounds.y,
+            .capture_width = window_info.bounds.width,
+            .capture_height = window_info.bounds.height,
             .desktop_index = selected_display.index,
         };
     }
@@ -2502,23 +2612,23 @@ fn createScreenshotImage(input: struct {
     };
 
     if (input.region) |region| {
-        const rect: c.CGRect = .{
-            .origin = .{
-                .x = selected_display.bounds.origin.x + region.x,
-                .y = selected_display.bounds.origin.y + region.y,
-            },
-            .size = .{ .width = region.width, .height = region.height },
+        const desktop_rect = DesktopRect{
+            .x = selected_display.bounds.origin.x + region.x,
+            .y = selected_display.bounds.origin.y + region.y,
+            .width = region.width,
+            .height = region.height,
         };
-        const region_image = c.CGDisplayCreateImageForRect(selected_display.id, rect);
+        const display_rect = rectInDisplaySpace(desktopRectFromCGRect(selected_display.bounds), desktop_rect);
+        const region_image = c.CGDisplayCreateImageForRect(selected_display.id, cgRectFromDesktopRect(display_rect));
         if (region_image == null) {
             return error.CaptureFailed;
         }
         return .{
             .image = region_image,
-            .capture_x = rect.origin.x,
-            .capture_y = rect.origin.y,
-            .capture_width = rect.size.width,
-            .capture_height = rect.size.height,
+            .capture_x = desktop_rect.x,
+            .capture_y = desktop_rect.y,
+            .capture_width = desktop_rect.width,
+            .capture_height = desktop_rect.height,
             .desktop_index = selected_display.index,
         };
     }
@@ -2545,10 +2655,89 @@ fn normalizeWindowId(raw_id: f64) !u32 {
     return @intCast(normalized);
 }
 
-fn findWindowBoundsById(target_window_id: u32) !c.CGRect {
+fn createMacosWindowCaptureTempPath(window_id: u32) ![]u8 {
+    return std.fmt.allocPrint(
+        std.heap.c_allocator,
+        "/tmp/usecomputer-window-{d}-{d}.png",
+        .{ window_id, std.time.nanoTimestamp() },
+    );
+}
+
+fn captureMacosWindowToPath(window_id: u32, output_path: []const u8) !void {
+    const window_flag = try std.fmt.allocPrint(std.heap.c_allocator, "-l{d}", .{window_id});
+    defer std.heap.c_allocator.free(window_flag);
+
+    var child = std.process.Child.init(
+        &.{ "screencapture", "-x", window_flag, output_path },
+        std.heap.c_allocator,
+    );
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+
+    try child.spawn();
+    const term = try child.wait();
+    switch (term) {
+        .Exited => |code| {
+            if (code != 0) {
+                return error.CaptureFailed;
+            }
+        },
+        else => return error.CaptureFailed,
+    }
+}
+
+fn loadScreenshotImageAtPath(path: []const u8) !c.CGImageRef {
+    const path_as_u8: [*]const u8 = @ptrCast(path.ptr);
+    const file_url = c.CFURLCreateFromFileSystemRepresentation(
+        null,
+        path_as_u8,
+        @as(c_long, @intCast(path.len)),
+        0,
+    );
+    if (file_url == null) {
+        return error.FileUrlCreateFailed;
+    }
+    defer c.CFRelease(file_url);
+
+    const source = c.CGImageSourceCreateWithURL(file_url, null);
+    if (source == null) {
+        return error.LoadFailed;
+    }
+    defer c.CFRelease(source);
+
+    return c.CGImageSourceCreateImageAtIndex(source, 0, null) orelse error.LoadFailed;
+}
+
+fn rectInDisplaySpace(display_bounds: DesktopRect, desktop_rect: DesktopRect) DesktopRect {
+    return .{
+        .x = desktop_rect.x - display_bounds.x,
+        .y = desktop_rect.y - display_bounds.y,
+        .width = desktop_rect.width,
+        .height = desktop_rect.height,
+    };
+}
+
+fn desktopRectFromCGRect(rect: c.CGRect) DesktopRect {
+    return .{
+        .x = rect.origin.x,
+        .y = rect.origin.y,
+        .width = rect.size.width,
+        .height = rect.size.height,
+    };
+}
+
+fn cgRectFromDesktopRect(rect: DesktopRect) c.CGRect {
+    return .{
+        .origin = .{ .x = rect.x, .y = rect.y },
+        .size = .{ .width = rect.width, .height = rect.height },
+    };
+}
+
+fn findWindowInfoById(target_window_id: u32) !window.WindowInfo {
     const Context = struct {
         target_id: u32,
-        bounds: ?c.CGRect = null,
+        info: ?window.WindowInfo = null,
     };
 
     var context = Context{ .target_id = target_window_id };
@@ -2557,10 +2746,7 @@ fn findWindowBoundsById(target_window_id: u32) !c.CGRect {
             if (info.id != ctx.target_id) {
                 return;
             }
-            ctx.bounds = .{
-                .origin = .{ .x = info.bounds.x, .y = info.bounds.y },
-                .size = .{ .width = info.bounds.width, .height = info.bounds.height },
-            };
+            ctx.info = info;
             return error.Found;
         }
     }.callback) catch |err| {
@@ -2569,8 +2755,8 @@ fn findWindowBoundsById(target_window_id: u32) !c.CGRect {
         }
     };
 
-    if (context.bounds) |bounds| {
-        return bounds;
+    if (context.info) |info| {
+        return info;
     }
     return error.WindowNotFound;
 }

@@ -4,6 +4,16 @@
 
 All notable changes to `usecomputer` will be documented in this file.
 
+## Unreleased
+
+1. **Fixed macOS `screenshot --window` captures for non-frontmost apps and multi-display setups** — window-scoped screenshots now use the native macOS `screencapture -l<window-id>` path, which correctly captures windows like Finder, Preview, Slack, and Chrome even when CoreGraphics window capture is unreliable. Region screenshots also now translate desktop-global coordinates into display-local coordinates before cropping secondary displays:
+
+   ```bash
+   usecomputer window list --json
+   usecomputer screenshot ./finder.png --window 51448 --json
+   usecomputer screenshot ./region.png --display 1 --region "100,100,800,600" --json
+   ```
+
 ## 0.1.10
 
 1. **Added repeatable `--modifier <key>` support to `click`** — hold one or more keyboard modifiers while clicking, using the same modifier names and aliases accepted by `press` (`cmd`, `command`, `meta`, `option`, `alt`, `ctrl`, `control`, `shift`, `fn`):
