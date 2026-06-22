@@ -680,6 +680,7 @@ fn createWindowsScreenshotImage(input: struct {
     if (builtin.target.os.tag != .windows) {
         return error.UnsupportedPlatform;
     }
+    ensureWindowsDpiAware();
 
     if (input.window_id) |window_id| {
         const hwnd = try normalizeWindowHandle(window_id);
@@ -697,7 +698,7 @@ fn createWindowsScreenshotImage(input: struct {
             return error.CaptureFailed;
         }
 
-        const image = try captureWindowsRect(capture_rect);
+        const image = captureWindowsWindow(hwnd, capture_rect) catch try captureWindowsRect(capture_rect);
         const desktop_index = resolveWindowsDesktopIndexForRect(capture_rect) catch 0;
         return .{
             .image = image,
@@ -743,6 +744,88 @@ fn createWindowsScreenshotImage(input: struct {
     };
 }
 
+fn bitmapToRawRgba(screen_dc: c_windows.HDC, bitmap: c_windows.HBITMAP, width: c_int, height: c_int) !RawRgbaImage {
+    const width_usize = @as(usize, @intCast(width));
+    const height_usize = @as(usize, @intCast(height));
+    const pixel_count = width_usize * height_usize;
+    const pixels = try std.heap.c_allocator.alloc(u8, pixel_count * 4);
+    errdefer std.heap.c_allocator.free(pixels);
+
+    var bmi: c_windows.BITMAPINFO = std.mem.zeroes(c_windows.BITMAPINFO);
+    bmi.bmiHeader.biSize = @sizeOf(c_windows.BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = c_windows.BI_RGB;
+
+    const scanlines = c_windows.GetDIBits(
+        screen_dc,
+        bitmap,
+        0,
+        @as(c_uint, @intCast(height)),
+        pixels.ptr,
+        &bmi,
+        c_windows.DIB_RGB_COLORS,
+    );
+    if (scanlines == 0) {
+        return error.CaptureFailed;
+    }
+
+    var i: usize = 0;
+    while (i < pixels.len) : (i += 4) {
+        const blue = pixels[i];
+        const red = pixels[i + 2];
+        pixels[i] = red;
+        pixels[i + 2] = blue;
+        pixels[i + 3] = 255;
+    }
+
+    return .{ .pixels = pixels, .width = width_usize, .height = height_usize };
+}
+
+fn captureWindowsWindow(hwnd: c_windows.HWND, rect: WindowsRect) !RawRgbaImage {
+    if (builtin.target.os.tag != .windows) {
+        return error.UnsupportedPlatform;
+    }
+    ensureWindowsDpiAware();
+
+    if (rect.width <= 0 or rect.height <= 0) {
+        return error.CaptureFailed;
+    }
+
+    const screen_dc = c_windows.GetDC(null);
+    if (screen_dc == null) {
+        return error.CaptureFailed;
+    }
+    defer _ = c_windows.ReleaseDC(null, screen_dc);
+
+    const mem_dc = c_windows.CreateCompatibleDC(screen_dc);
+    if (mem_dc == null) {
+        return error.CaptureFailed;
+    }
+    defer _ = c_windows.DeleteDC(mem_dc);
+
+    const bitmap = c_windows.CreateCompatibleBitmap(screen_dc, rect.width, rect.height);
+    if (bitmap == null) {
+        return error.CaptureFailed;
+    }
+    defer _ = c_windows.DeleteObject(bitmap);
+
+    const prev = c_windows.SelectObject(mem_dc, bitmap);
+    if (prev == null) {
+        return error.CaptureFailed;
+    }
+    defer _ = c_windows.SelectObject(mem_dc, prev);
+
+    const print_window_render_full_content: c_uint = 0x00000002;
+    if (c_windows.PrintWindow(hwnd, mem_dc, print_window_render_full_content) == 0) {
+        return error.CaptureFailed;
+    }
+
+    return try bitmapToRawRgba(screen_dc, bitmap, rect.width, rect.height);
+}
+
 fn captureWindowsRect(rect: WindowsRect) !RawRgbaImage {
     if (builtin.target.os.tag != .windows) {
         return error.UnsupportedPlatform;
@@ -782,43 +865,7 @@ fn captureWindowsRect(rect: WindowsRect) !RawRgbaImage {
         return error.CaptureFailed;
     }
 
-    const width_usize = @as(usize, @intCast(rect.width));
-    const height_usize = @as(usize, @intCast(rect.height));
-    const pixel_count = width_usize * height_usize;
-    const pixels = try std.heap.c_allocator.alloc(u8, pixel_count * 4);
-    errdefer std.heap.c_allocator.free(pixels);
-
-    var bmi: c_windows.BITMAPINFO = std.mem.zeroes(c_windows.BITMAPINFO);
-    bmi.bmiHeader.biSize = @sizeOf(c_windows.BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = rect.width;
-    bmi.bmiHeader.biHeight = -rect.height;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = c_windows.BI_RGB;
-
-    const scanlines = c_windows.GetDIBits(
-        mem_dc,
-        bitmap,
-        0,
-        @as(c_uint, @intCast(rect.height)),
-        pixels.ptr,
-        &bmi,
-        c_windows.DIB_RGB_COLORS,
-    );
-    if (scanlines == 0) {
-        return error.CaptureFailed;
-    }
-
-    var i: usize = 0;
-    while (i < pixels.len) : (i += 4) {
-        const blue = pixels[i];
-        const red = pixels[i + 2];
-        pixels[i] = red;
-        pixels[i + 2] = blue;
-        pixels[i + 3] = 255;
-    }
-
-    return .{ .pixels = pixels, .width = width_usize, .height = height_usize };
+    return try bitmapToRawRgba(screen_dc, bitmap, rect.width, rect.height);
 }
 
 fn writeU32BigEndian(writer: anytype, value: u32) !void {
@@ -2958,6 +3005,7 @@ fn serializeWindowListJsonWindows() ![]u8 {
     if (builtin.target.os.tag != .windows) {
         return error.UnsupportedPlatform;
     }
+    ensureWindowsDpiAware();
 
     var write_buffer: [64 * 1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&write_buffer);
