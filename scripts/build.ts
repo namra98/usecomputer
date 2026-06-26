@@ -8,6 +8,7 @@ import path from 'node:path'
 type Target = {
   name: string
   zigTarget: string
+  cpu?: string
 }
 
 const rootDirectory = path.resolve(import.meta.dirname, '..')
@@ -26,7 +27,7 @@ const targets: Target[] = [
   { name: 'darwin-x64', zigTarget: 'x86_64-macos' },
   { name: 'linux-arm64', zigTarget: 'aarch64-linux-gnu' },
   { name: 'linux-x64', zigTarget: 'x86_64-linux-gnu' },
-  { name: 'win32-x64', zigTarget: 'x86_64-windows-gnu' },
+  { name: 'win32-x64', zigTarget: 'x86_64-windows', cpu: 'baseline' },
 ]
 
 // Zig 0.15.2's linker can't parse macOS 26+ SDK TBD files (arm64e-macos
@@ -93,10 +94,13 @@ async function buildTarget({ target }: { target: Target }): Promise<void> {
   // When building for the host platform, omit -Dtarget so Zig uses the
   // native system include/lib paths. Cross-compiling with an explicit
   // target makes Zig ignore host system libraries (X11, png, etc).
-  const isNativeBuild = target.name === hostTarget
+  const isNativeBuild = target.name === hostTarget && !target.cpu
   const zigArgs = isNativeBuild
     ? ['build', '-Doptimize=ReleaseFast', `-Dversion=${packageVersion}`]
     : ['build', '-Doptimize=ReleaseFast', `-Dtarget=${target.zigTarget}`, `-Dversion=${packageVersion}`]
+  if (target.cpu) {
+    zigArgs.push(`-Dcpu=${target.cpu}`)
+  }
   await runCommand({
     command: 'zig',
     args: zigArgs,

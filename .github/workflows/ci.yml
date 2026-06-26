@@ -199,7 +199,7 @@ jobs:
       - name: Build C API win32-x64
         shell: bash
         run: |
-          zig build c-api -Doptimize=ReleaseFast
+          zig build c-api -Doptimize=ReleaseFast -Dtarget=x86_64-windows -Dcpu=baseline
           # On Windows zig puts DLLs in zig-out/bin/, import libs in zig-out/lib/
           cp zig-out/bin/usecomputer_c.dll dist/win32-x64/
           cp zig-out/lib/usecomputer_c.lib dist/win32-x64/ 2>/dev/null || true
